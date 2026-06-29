@@ -245,6 +245,8 @@ export const rankTrackingKeywords = sqliteTable(
       .notNull()
       .references(() => rankTrackingConfigs.id, { onDelete: "cascade" }),
     keyword: text("keyword").notNull(),
+    locationCode: integer("location_code"),      // null = inherit from config
+    locationName: text("location_name"),          // cached display name
     searchVolume: integer("search_volume"),
     keywordDifficulty: integer("keyword_difficulty"),
     cpc: real("cpc"),
@@ -456,3 +458,19 @@ export const auditLighthouseResults = sqliteTable(
   },
   (table) => [index("audit_lighthouse_results_audit_id_idx").on(table.auditId)],
 );
+
+// ============================================================================
+// Locations cache — pre-populated from DataForSEO, used for location pickers
+// ============================================================================
+
+export const locationsCache = sqliteTable("locations_cache", {
+  code: integer("code").primaryKey(),
+  name: text("name").notNull(),
+  fullName: text("full_name").notNull(),
+  nameNormalized: text("name_normalized").notNull(),
+  type: text("type").notNull(),
+  countryCode: text("country_code").notNull(),
+  fetchedAt: text("fetched_at")
+    .notNull()
+    .default(sql`(current_timestamp)`),
+});
