@@ -21,7 +21,8 @@ import {
   getLanguageCode,
   getLanguageOptions,
 } from "@/client/features/keywords/locations";
-import { LocationSelect } from "@/client/components/LocationSelect";
+import { LOCATION_OPTIONS } from "@/shared/keyword-locations";
+import { LocationPicker } from "@/client/components/LocationPicker";
 import { KeywordSuggestionStep } from "./KeywordSuggestionStep";
 
 type Props = {
@@ -195,14 +196,22 @@ export function RankTrackingConfigModal({
 
         <div className="form-control">
           <label className="label">
-            <span className="label-text font-medium">Country</span>
+            <span className="label-text font-medium">Location</span>
           </label>
-          <LocationSelect
-            value={locationCode}
-            onChange={(newLocationCode) => {
-              setLocationCode(newLocationCode);
-              setLanguageCode(getLanguageCode(newLocationCode));
+          <LocationPicker
+            value={
+              (() => {
+                const opt = LOCATION_OPTIONS.find((o) => o.code === locationCode);
+                return opt
+                  ? { code: opt.code, name: opt.label }
+                  : { code: locationCode, name: `Code ${locationCode}` };
+              })()
+            }
+            onChange={(loc) => {
+              setLocationCode(loc.code);
+              setLanguageCode(getLanguageCode(loc.code));
             }}
+            placeholder="Search countries, cities, regions…"
           />
         </div>
 
