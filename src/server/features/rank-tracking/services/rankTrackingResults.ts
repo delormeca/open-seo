@@ -93,6 +93,8 @@ export async function getLatestResults(
         searchVolume: keyword.searchVolume,
         keywordDifficulty: keyword.keywordDifficulty,
         cpc: keyword.cpc,
+        locationCode: keyword.locationCode ?? null,
+        locationName: keyword.locationName ?? null,
         desktop: createEmptyDeviceResult(
           previousPositions.get(`${keyword.id}:desktop`) ?? null,
         ),

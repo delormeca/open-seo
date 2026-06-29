@@ -22,6 +22,7 @@ import {
   getKeywordHistorySchema,
   getConfigTrendSchema,
   getPositionMatrixSchema,
+  updateKeywordLocationSchema,
 } from "@/types/schemas/rank-tracking";
 
 export interface RankKeywordHistoryPoint {
@@ -188,6 +189,8 @@ export const addTrackingKeywords = createServerFn({ method: "POST" })
       data.configId,
       context.projectId,
       data.keywords,
+      data.locationCode,
+      data.locationName,
     );
 
     let checkTriggered = false;
@@ -338,4 +341,18 @@ export const getRankPositionMatrix = createServerFn({ method: "POST" })
       data.device,
       data.runLimit,
     );
+  });
+
+export const updateKeywordLocation = createServerFn({ method: "POST" })
+  .middleware(requireProjectContext)
+  .inputValidator((data: unknown) => updateKeywordLocationSchema.parse(data))
+  .handler(async ({ data, context }) => {
+    await requireConfig(data.configId, context.projectId);
+    await RankTrackingRepository.updateKeywordLocation(
+      data.keywordId,
+      data.configId,
+      data.locationCode,
+      data.locationName,
+    );
+    return { ok: true };
   });

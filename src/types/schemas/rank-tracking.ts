@@ -37,6 +37,8 @@ export interface RankTrackingRow {
   searchVolume: number | null;
   keywordDifficulty: number | null;
   cpc: number | null;
+  locationCode: number | null;
+  locationName: string | null;
   desktop: RankTrackingDeviceResult;
   mobile: RankTrackingDeviceResult;
 }
@@ -102,6 +104,15 @@ export const addKeywordsSchema = z.object({
   projectId: z.string().uuid(),
   configId: z.string().uuid(),
   keywords: z.array(z.string().min(1).max(200)).min(1).max(2000),
+  locationCode: z.number().int().positive().optional(),
+  locationName: z.string().max(200).optional(),
+});
+
+export const updateKeywordLocationSchema = z.object({
+  configId: z.string().min(1),
+  keywordId: z.string().min(1),
+  locationCode: z.number().int().positive().nullable(),
+  locationName: z.string().max(200).nullable(),
 });
 
 export const removeKeywordsSchema = z.object({

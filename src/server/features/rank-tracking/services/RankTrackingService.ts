@@ -126,6 +126,8 @@ async function addKeywords(
   configId: string,
   projectId: string,
   keywords: string[],
+  locationCode?: number,
+  locationName?: string,
 ) {
   await getValidatedConfig(configId, projectId);
 
@@ -146,7 +148,13 @@ async function addKeywords(
   const available = MAX_KEYWORDS_PER_CONFIG - existing.length;
 
   const seen = new Set<string>();
-  const rows: Array<{ id: string; configId: string; keyword: string }> = [];
+  const rows: Array<{
+    id: string;
+    configId: string;
+    keyword: string;
+    locationCode: number | null;
+    locationName: string | null;
+  }> = [];
   for (const raw of keywords) {
     if (rows.length >= available) break;
     const normalized = raw.trim().toLowerCase();
@@ -156,7 +164,13 @@ async function addKeywords(
       !existingKeywords.has(normalized)
     ) {
       seen.add(normalized);
-      rows.push({ id: crypto.randomUUID(), configId, keyword: normalized });
+      rows.push({
+        id: crypto.randomUUID(),
+        configId,
+        keyword: normalized,
+        locationCode: locationCode ?? null,
+        locationName: locationName ?? null,
+      });
     }
   }
 

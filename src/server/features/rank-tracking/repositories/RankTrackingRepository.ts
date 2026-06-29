@@ -238,11 +238,34 @@ async function getKeywordsForConfig(configId: string) {
 }
 
 async function addKeywordsToConfig(
-  keywords: Array<{ id: string; configId: string; keyword: string }>,
+  keywords: Array<{
+    id: string;
+    configId: string;
+    keyword: string;
+    locationCode?: number | null;
+    locationName?: string | null;
+  }>,
 ) {
   await executeInBatches(keywords, (kw) =>
     db.insert(rankTrackingKeywords).values(kw).onConflictDoNothing(),
   );
+}
+
+async function updateKeywordLocation(
+  keywordId: string,
+  configId: string,
+  locationCode: number | null,
+  locationName: string | null,
+) {
+  await db
+    .update(rankTrackingKeywords)
+    .set({ locationCode, locationName })
+    .where(
+      and(
+        eq(rankTrackingKeywords.id, keywordId),
+        eq(rankTrackingKeywords.configId, configId),
+      ),
+    );
 }
 
 async function removeKeywordsFromConfig(
@@ -377,6 +400,7 @@ export const RankTrackingRepository = {
   getSnapshotsForRun,
   getKeywordsForConfig,
   addKeywordsToConfig,
+  updateKeywordLocation,
   removeKeywordsFromConfig,
   updateKeywordMetrics,
   getKeywordCountForConfig,
