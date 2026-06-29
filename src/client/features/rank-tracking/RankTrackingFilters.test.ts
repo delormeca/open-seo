@@ -30,6 +30,8 @@ function makeRow(
     searchVolume: null,
     keywordDifficulty: null,
     cpc: null,
+    locationCode: null,
+    locationName: null,
     desktop: {
       position: desktopPosition,
       previousPosition: null,

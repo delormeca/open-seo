@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
-import { FileDown, Loader2, Sheet, Trash2 } from "lucide-react";
+import { FileDown, Loader2, MapPin, Sheet, Trash2 } from "lucide-react";
 import { Modal } from "@/client/components/Modal";
 import {
   AppDataTable,
@@ -16,7 +16,10 @@ import { downloadCsv } from "@/client/lib/csv";
 import { exportTableToSheets } from "@/client/lib/exportToSheets";
 import { captureClientEvent } from "@/client/lib/posthog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { removeTrackingKeywords } from "@/serverFunctions/rank-tracking";
+import {
+  removeTrackingKeywords,
+  updateKeywordLocation,
+} from "@/serverFunctions/rank-tracking";
 import { getStandardErrorMessage } from "@/client/lib/error-messages";
 import type { RankTrackingRow } from "@/types/schemas/rank-tracking";
 import { useRankTrackingColumns } from "./RankTrackingColumns";
@@ -25,6 +28,11 @@ import {
   KeywordTrendModal,
   type KeywordTrendTarget,
 } from "./KeywordTrendModal";
+import {
+  LocationPicker,
+  type LocationPickerValue,
+} from "@/client/components/LocationPicker";
+import { LOCATION_OPTIONS } from "@/shared/keyword-locations";
 import type { SelectionAnchor } from "@/client/components/table/tableSelection";
 
 export function RankTrackingTable({
@@ -57,7 +65,15 @@ export function RankTrackingTable({
   const [trendTarget, setTrendTarget] = useState<KeywordTrendTarget | null>(
     null,
   );
+  const [locationTarget, setLocationTarget] = useState<RankTrackingRow | null>(
+    null,
+  );
+  const [showBulkLocationPicker, setShowBulkLocationPicker] = useState(false);
   const selectAnchorRef = useRef<SelectionAnchor | null>(null);
+
+  const configLocationLabel =
+    LOCATION_OPTIONS.find((o) => o.code === locationCode)?.label ??
+    `Code ${locationCode}`;
 
   const handleKeywordClick = useCallback(
     (row: RankTrackingRow) =>
@@ -68,12 +84,81 @@ export function RankTrackingTable({
     [],
   );
 
+  const handleLocationClick = useCallback(
+    (row: RankTrackingRow) => setLocationTarget(row),
+    [],
+  );
+
+  const locationMutation = useMutation({
+    mutationFn: (args: {
+      keywordId: string;
+      locationCode: number | null;
+      locationName: string | null;
+    }) =>
+      updateKeywordLocation({
+        data: {
+          projectId,
+          configId,
+          keywordId: args.keywordId,
+          locationCode: args.locationCode,
+          locationName: args.locationName,
+        },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["rankTrackingResults", projectId, configId],
+      });
+    },
+    onError: (error) => {
+      toast.error(
+        getStandardErrorMessage(error, "Failed to update keyword location"),
+      );
+    },
+  });
+
+  const bulkLocationMutation = useMutation({
+    mutationFn: async (location: LocationPickerValue) => {
+      const ids = selectedRows.map((r) => r.id);
+      await Promise.all(
+        ids.map((keywordId) =>
+          updateKeywordLocation({
+            data: {
+              projectId,
+              configId,
+              keywordId,
+              locationCode: location.code,
+              locationName: location.name,
+            },
+          }),
+        ),
+      );
+      return { count: ids.length };
+    },
+    onSuccess: ({ count }) => {
+      setShowBulkLocationPicker(false);
+      table.resetRowSelection();
+      void queryClient.invalidateQueries({
+        queryKey: ["rankTrackingResults", projectId, configId],
+      });
+      toast.success(
+        `Location updated for ${count} keyword${count !== 1 ? "s" : ""}`,
+      );
+    },
+    onError: (error) => {
+      toast.error(
+        getStandardErrorMessage(error, "Failed to update locations"),
+      );
+    },
+  });
+
   const columns = useRankTrackingColumns(
     showDesktop,
     showMobile,
     domain,
     selectAnchorRef,
     handleKeywordClick,
+    configLocationLabel,
+    handleLocationClick,
   );
 
   const table = useAppTable({
@@ -170,6 +255,12 @@ export function RankTrackingTable({
         actions={
           <div className="flex items-center px-1.5">
             <TableBulkActionButton
+              icon={<MapPin className="size-3.5" />}
+              onClick={() => setShowBulkLocationPicker(true)}
+            >
+              Set location
+            </TableBulkActionButton>
+            <TableBulkActionButton
               icon={<Trash2 className="size-3.5" />}
               onClick={() => setShowConfirm(true)}
               variant="danger"
@@ -242,6 +333,117 @@ export function RankTrackingTable({
           serpDepth={serpDepth}
           onClose={() => setTrendTarget(null)}
         />
+      )}
+
+      {/* Single-keyword location picker modal */}
+      {locationTarget && (
+        <Modal
+          onClose={() => setLocationTarget(null)}
+          labelledBy="set-keyword-location-title"
+        >
+          <h3 id="set-keyword-location-title" className="text-lg font-semibold">
+            Set location for "{locationTarget.keyword}"
+          </h3>
+          <p className="text-sm text-base-content/70 mb-3">
+            Override the config default ({configLocationLabel}) for this keyword.
+          </p>
+          <LocationPicker
+            value={
+              locationTarget.locationCode != null
+                ? {
+                    code: locationTarget.locationCode,
+                    name:
+                      locationTarget.locationName ??
+                      `Code ${locationTarget.locationCode}`,
+                  }
+                : null
+            }
+            onChange={(loc) => {
+              locationMutation.mutate(
+                {
+                  keywordId: locationTarget.trackingKeywordId,
+                  locationCode: loc.code,
+                  locationName: loc.name,
+                },
+                {
+                  onSuccess: () => {
+                    setLocationTarget(null);
+                    toast.success(`Location set to ${loc.name}`);
+                  },
+                },
+              );
+            }}
+            placeholder="Search locations…"
+          />
+          <div className="flex justify-end gap-2 mt-4">
+            {locationTarget.locationCode != null && (
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  locationMutation.mutate(
+                    {
+                      keywordId: locationTarget.trackingKeywordId,
+                      locationCode: null,
+                      locationName: null,
+                    },
+                    {
+                      onSuccess: () => {
+                        setLocationTarget(null);
+                        toast.success("Location reset to config default");
+                      },
+                    },
+                  );
+                }}
+                disabled={locationMutation.isPending}
+              >
+                Reset to default
+              </button>
+            )}
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setLocationTarget(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk location picker modal */}
+      {showBulkLocationPicker && (
+        <Modal
+          onClose={() => setShowBulkLocationPicker(false)}
+          labelledBy="bulk-location-title"
+        >
+          <h3 id="bulk-location-title" className="text-lg font-semibold">
+            Set location for {selectedCount} keyword
+            {selectedCount !== 1 ? "s" : ""}
+          </h3>
+          <p className="text-sm text-base-content/70 mb-3">
+            All selected keywords will use this location for rank checks.
+          </p>
+          <LocationPicker
+            value={null}
+            onChange={(loc) => bulkLocationMutation.mutate(loc)}
+            placeholder="Search locations…"
+          />
+          {bulkLocationMutation.isPending && (
+            <div className="flex items-center gap-2 mt-3 text-sm text-base-content/60">
+              <Loader2 className="size-3.5 animate-spin" />
+              Updating {selectedCount} keyword
+              {selectedCount !== 1 ? "s" : ""}…
+            </div>
+          )}
+          <div className="flex justify-end gap-2 mt-4">
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setShowBulkLocationPicker(false)}
+              disabled={bulkLocationMutation.isPending}
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
       )}
 
       <AppDataTable table={table} getCellClassName={() => "align-top"} />

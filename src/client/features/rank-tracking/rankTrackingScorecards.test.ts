@@ -23,6 +23,8 @@ function row(
     searchVolume,
     keywordDifficulty: null,
     cpc: null,
+    locationCode: null,
+    locationName: null,
     desktop,
     mobile,
   };

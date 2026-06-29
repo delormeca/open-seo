@@ -251,6 +251,7 @@ function RankTrackingDomainDetailInner({
             <AddKeywordsPanel
               configId={config.id}
               projectId={projectId}
+              configLocationCode={config.locationCode}
               onSuccess={handleKeywordsAdded}
               onCancel={() => setShowAddKeywords(false)}
             />

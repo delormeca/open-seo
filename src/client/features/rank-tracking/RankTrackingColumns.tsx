@@ -1,5 +1,5 @@
 import { useMemo, type MutableRefObject } from "react";
-import { ArrowUp, ArrowDown } from "lucide-react";
+import { ArrowUp, ArrowDown, MapPin } from "lucide-react";
 import type { ColumnDef, SortingFn } from "@tanstack/react-table";
 import { makeSelectionColumn } from "@/client/components/table/AppDataTable";
 import type { RankTrackingRow } from "@/types/schemas/rank-tracking";
@@ -24,6 +24,8 @@ const HEADER_TOOLTIPS: Record<string, string> = {
     "Current Google ranking position, showing change from the comparison period",
   url: "The page on your site that ranks for this keyword",
   serp: "Special result features appearing on the search results page (e.g. AI Overview, People Also Ask)",
+  location:
+    "The geographic location used for rank checks. Per-keyword overrides are shown; otherwise the config default is inherited.",
 };
 
 export function SortableHeader({
@@ -184,17 +186,62 @@ function makeSerpColumn(
   };
 }
 
+function makeLocationColumn(
+  configLocationName: string,
+  onLocationClick: (row: RankTrackingRow) => void,
+): ColumnDef<RankTrackingRow> {
+  return {
+    id: "location",
+    accessorKey: "locationName",
+    header: () => (
+      <span
+        className="text-xs uppercase tracking-wide font-medium text-base-content/60 cursor-help"
+        title={HEADER_TOOLTIPS.location}
+      >
+        Location
+      </span>
+    ),
+    size: 140,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const hasOverride = row.original.locationCode != null;
+      const displayName = hasOverride
+        ? row.original.locationName ?? `Code ${row.original.locationCode}`
+        : configLocationName;
+      return (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-xs text-left link link-hover decoration-dotted underline-offset-2"
+          onClick={() => onLocationClick(row.original)}
+          title={hasOverride ? "Per-keyword location override" : "Inherited from config (click to override)"}
+        >
+          <MapPin className="size-3 shrink-0" />
+          <span className={hasOverride ? "" : "italic text-base-content/50"}>
+            {displayName}
+            {!hasOverride && (
+              <span className="ml-1 text-base-content/40">(default)</span>
+            )}
+          </span>
+        </button>
+      );
+    },
+  };
+}
+
 export function useRankTrackingColumns(
   showDesktop: boolean,
   showMobile: boolean,
   domain: string,
   selectAnchorRef: MutableRefObject<SelectionAnchor | null>,
   onKeywordClick: (row: RankTrackingRow) => void,
+  configLocationName: string,
+  onLocationClick: (row: RankTrackingRow) => void,
 ): ColumnDef<RankTrackingRow>[] {
   return useMemo(() => {
     const cols: ColumnDef<RankTrackingRow>[] = [
       makeSelectionColumn<RankTrackingRow>(selectAnchorRef),
       makeKeywordColumn(onKeywordClick),
+      makeLocationColumn(configLocationName, onLocationClick),
     ];
     if (showDesktop) {
       cols.push(makeDeviceColumn("desktop"));
@@ -212,5 +259,5 @@ export function useRankTrackingColumns(
       cols.push(makeSerpColumn("mobile"));
     }
     return cols;
-  }, [showDesktop, showMobile, domain, selectAnchorRef, onKeywordClick]);
+  }, [showDesktop, showMobile, domain, selectAnchorRef, onKeywordClick, configLocationName, onLocationClick]);
 }
