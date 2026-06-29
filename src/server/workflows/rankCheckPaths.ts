@@ -18,7 +18,7 @@ const SINGLE_ATTEMPT_STEP_CONFIG = {
   timeout: "2 minutes" as const,
 };
 
-type KeywordEntry = { id: string; keyword: string };
+type KeywordEntry = { id: string; keyword: string; locationCode?: number | null };
 type RankCheckResultWithDevice = RankCheckResult & {
   device: "desktop" | "mobile";
 };
@@ -50,11 +50,15 @@ interface CheckContext {
   runId: string;
 }
 
+/** RankCheckTaskInput extended with a resolved per-task location. */
+type TaskInputWithLocation = RankCheckTaskInput & { locationCode: number };
+
 /** Expand keywords into one task input per keyword/device pair. */
 function expandToTaskInputs(
   keywords: KeywordEntry[],
   devices: RankTrackingConfig["devices"],
-): RankCheckTaskInput[] {
+  defaultLocationCode: number,
+): TaskInputWithLocation[] {
   const deviceList: Array<"desktop" | "mobile"> =
     devices === "both" ? ["desktop", "mobile"] : [devices];
   return keywords.flatMap((kw) =>
@@ -62,8 +66,23 @@ function expandToTaskInputs(
       keyword: kw.keyword,
       keywordId: kw.id,
       device,
+      locationCode: kw.locationCode ?? defaultLocationCode,
     })),
   );
+}
+
+/**
+ * Group an array of items by a key derived from each item.
+ * Returns a Map preserving insertion order of first-seen keys.
+ */
+function groupBy<T, K>(items: T[], keyFn: (item: T) => K): Map<K, T[]> {
+  const map = new Map<K, T[]>();
+  for (const item of items) {
+    const k = keyFn(item);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k)!.push(item);
+  }
+  return map;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,10 +95,12 @@ function expandToTaskInputs(
  * Check keyword/device pairs against the live endpoint and persist snapshots.
  * Per-call failures are logged and skipped (the metered client already charged
  * or refused each call individually). Returns the snapshot count written.
+ * Each task carries its own resolved locationCode (keyword-level override or
+ * config default).
  */
 async function checkBatchLive(
   ctx: CheckContext,
-  tasks: RankCheckTaskInput[],
+  tasks: TaskInputWithLocation[],
 ): Promise<number> {
   const settled = await Promise.allSettled(
     tasks.map((task) =>
@@ -87,7 +108,7 @@ async function checkBatchLive(
         .rankCheck({
           keyword: task.keyword,
           keywordId: task.keywordId,
-          locationCode: ctx.locationCode,
+          locationCode: task.locationCode,
           languageCode: ctx.languageCode,
           device: task.device,
           targetDomain: ctx.domain,
@@ -117,32 +138,48 @@ async function checkBatchLive(
 
 /**
  * Check keywords via Live API, parallel devices per keyword, real-time progress.
- * Snapshots are written incrementally after each batch so partial results
- * survive batch failures. ~6s per keyword batch.
- * Billing is handled per-call by the metered client.
+ * Keywords are grouped by their effective location code (keyword-level override
+ * or config default). Within each location group, keywords are processed in
+ * batches of KEYWORDS_PER_BATCH keywords (not tasks) with per-call billing
+ * handled by the metered client. Snapshots are written incrementally after each
+ * batch so partial results survive batch failures. ~6s per keyword batch.
  */
 export async function runLiveCheck(
   step: WorkflowStep,
   ctx: CheckContext,
 ): Promise<void> {
-  for (let i = 0; i < ctx.keywords.length; i += KEYWORDS_PER_BATCH) {
-    const keywordBatch = ctx.keywords.slice(i, i + KEYWORDS_PER_BATCH);
-    const batchTasks = expandToTaskInputs(keywordBatch, ctx.devices);
-    const batchIndex = Math.floor(i / KEYWORDS_PER_BATCH);
-    const keywordsChecked = i + keywordBatch.length;
+  // Group keywords by effective location, then expand each group to tasks.
+  const keywordsByLocation = groupBy(
+    ctx.keywords,
+    (kw) => kw.locationCode ?? ctx.locationCode,
+  );
 
-    await step.do(
-      `live-batch-${batchIndex}`,
-      SINGLE_ATTEMPT_STEP_CONFIG,
-      async () => {
-        const written = await checkBatchLive(ctx, batchTasks);
-        // Progress for the UI; finalize recounts from the DB anyway.
-        await RankTrackingRepository.updateRun(ctx.runId, {
-          keywordsChecked,
-        });
-        return written;
-      },
-    );
+  let globalBatchIndex = 0;
+  let keywordsChecked = 0;
+
+  for (const [locationCode, locationKeywords] of keywordsByLocation) {
+    for (let i = 0; i < locationKeywords.length; i += KEYWORDS_PER_BATCH) {
+      const keywordBatch = locationKeywords.slice(i, i + KEYWORDS_PER_BATCH);
+      // Expand this keyword batch to tasks with the group's resolved location.
+      const batchTasks = expandToTaskInputs(keywordBatch, ctx.devices, locationCode);
+      const batchIndex = globalBatchIndex++;
+      const batchKeywordsChecked = keywordsChecked + keywordBatch.length;
+
+      await step.do(
+        `live-batch-${batchIndex}`,
+        SINGLE_ATTEMPT_STEP_CONFIG,
+        async () => {
+          const written = await checkBatchLive(ctx, batchTasks);
+          // Progress for the UI; finalize recounts from the DB anyway.
+          await RankTrackingRepository.updateRun(ctx.runId, {
+            keywordsChecked: batchKeywordsChecked,
+          });
+          return written;
+        },
+      );
+
+      keywordsChecked = batchKeywordsChecked;
+    }
   }
 }
 
@@ -258,59 +295,74 @@ export interface QueuedCheckStats {
   fallbackChecked: number;
 }
 
+/** PostedRankCheckTask with the resolved location retained for the fallback path. */
+type PostedRankCheckTaskWithLocation = PostedRankCheckTask & {
+  locationCode: number;
+};
+
 /**
  * Check keywords via DataForSEO's standard task queue (~30% of live cost).
- * Posts every keyword/device pair as a queued task, then polls task_get for
- * ~15 minutes, writing snapshots incrementally as tasks complete. Anything
- * still unfinished after the polling window — plus tasks DataForSEO rejected
- * or failed — gets one shot at the live endpoint so a run never hangs on a
- * stuck queue. Billing happens at task_post (and per live-fallback call).
+ * Keywords are grouped by their effective location code (keyword-level override
+ * or config default). Each location group is posted in chunks of at most
+ * MAX_TASKS_PER_POST using that group's locationCode — because DataForSEO's
+ * task_post API applies one location per request. The polling and fallback
+ * logic is unchanged; location is carried on every pending/fallback entry so
+ * the live fallback uses the correct per-keyword location.
+ * Billing happens at task_post (and per live-fallback call).
  */
 export async function runQueuedCheck(
   step: WorkflowStep,
   ctx: CheckContext,
 ): Promise<QueuedCheckStats> {
-  const taskInputs = expandToTaskInputs(ctx.keywords, ctx.devices);
+  const taskInputs = expandToTaskInputs(ctx.keywords, ctx.devices, ctx.locationCode);
+
+  // Group task inputs by effective location so each task_post call uses a
+  // uniform location code (DataForSEO requires one location per POST body).
+  const tasksByLocation = groupBy(taskInputs, (t) => t.locationCode);
 
   // Post all tasks to the queue, <=100 per request, one metered step each.
   // A failed chunk must not abort the run — earlier chunks were already
   // charged at DataForSEO, so their results have to be collected. The failed
   // chunk's pairs go to the live fallback instead.
-  let pending: PostedRankCheckTask[] = [];
-  const fallback: RankCheckTaskInput[] = [];
-  for (let i = 0; i < taskInputs.length; i += MAX_TASKS_PER_POST) {
-    const chunk = taskInputs.slice(i, i + MAX_TASKS_PER_POST);
-    const postIndex = Math.floor(i / MAX_TASKS_PER_POST);
-    let posted: PostedRankCheckTask[];
-    try {
-      posted = await step.do(
-        `post-tasks-${postIndex}`,
-        SINGLE_ATTEMPT_STEP_CONFIG,
-        async () =>
-          ctx.client.serp.rankCheckTaskPost({
-            tasks: chunk,
-            locationCode: ctx.locationCode,
-            languageCode: ctx.languageCode,
-            depth: ctx.serpDepth,
-            targetDomain: ctx.domain,
-          }),
-      );
-    } catch (error) {
-      console.warn(
-        `[rank-check] ${ctx.runId} post-tasks-${postIndex} failed:`,
-        error,
-      );
-      fallback.push(...chunk);
-      continue;
-    }
-    pending.push(...posted);
-    if (posted.length < chunk.length) {
-      const acceptedKeys = new Set(
-        posted.map((t) => `${t.keywordId}:${t.device}`),
-      );
-      fallback.push(
-        ...chunk.filter((t) => !acceptedKeys.has(`${t.keywordId}:${t.device}`)),
-      );
+  let pending: PostedRankCheckTaskWithLocation[] = [];
+  const fallback: TaskInputWithLocation[] = [];
+  let globalPostIndex = 0;
+
+  for (const [locationCode, locationTasks] of tasksByLocation) {
+    for (let i = 0; i < locationTasks.length; i += MAX_TASKS_PER_POST) {
+      const chunk = locationTasks.slice(i, i + MAX_TASKS_PER_POST);
+      const postIndex = globalPostIndex++;
+      let posted: PostedRankCheckTask[];
+      try {
+        posted = await step.do(
+          `post-tasks-${postIndex}`,
+          SINGLE_ATTEMPT_STEP_CONFIG,
+          async () =>
+            ctx.client.serp.rankCheckTaskPost({
+              tasks: chunk,
+              locationCode,
+              languageCode: ctx.languageCode,
+              depth: ctx.serpDepth,
+              targetDomain: ctx.domain,
+            }),
+        );
+      } catch (error) {
+        console.warn(
+          `[rank-check] ${ctx.runId} post-tasks-${postIndex} failed:`,
+          error,
+        );
+        fallback.push(...chunk);
+        continue;
+      }
+      pending.push(...posted.map((t) => ({ ...t, locationCode })));
+      if (posted.length < chunk.length) {
+        const acceptedKeys = new Set(
+          posted.map((t) => `${t.keywordId}:${t.device}`),
+        );
+        fallback.push(
+          ...chunk.filter((t) => !acceptedKeys.has(`${t.keywordId}:${t.device}`)),
+        );
+      }
     }
   }
 
@@ -348,16 +400,38 @@ export async function runQueuedCheck(
     }
 
     stats.queueCollected += outcome.collected;
-    pending = [...outcome.stillPending, ...overflow];
-    fallback.push(...outcome.failed);
+    // collectQueuedRound pushes the original task objects into stillPending /
+    // failed, so the locationCode we attached is still present at runtime even
+    // though TypeScript only sees PostedRankCheckTask. Cast to recover it.
+    pending = [
+      ...(outcome.stillPending as PostedRankCheckTaskWithLocation[]),
+      ...overflow,
+    ];
+    fallback.push(
+      ...(outcome.failed as PostedRankCheckTaskWithLocation[]).map((t) => ({
+        keyword: t.keyword,
+        keywordId: t.keywordId,
+        device: t.device,
+        locationCode: t.locationCode,
+      })),
+    );
   }
 
   // Live fallback: queued tasks that never finished, failed, or were rejected
   // at post time. A straggler is double-billed (customer was metered the
   // queued post cost and now the live call too — fractions of a cent).
-  // Progress isn't updated here; finalize recounts keywordsChecked from the
-  // DB.
-  const stragglers: RankCheckTaskInput[] = [...fallback, ...pending];
+  // Progress isn't updated here; finalize recounts keywordsChecked from the DB.
+  // Each straggler carries its resolved locationCode so the live call uses
+  // the correct per-keyword location.
+  const stragglers: TaskInputWithLocation[] = [
+    ...fallback,
+    ...pending.map((t) => ({
+      keyword: t.keyword,
+      keywordId: t.keywordId,
+      device: t.device,
+      locationCode: t.locationCode,
+    })),
+  ];
   stats.fallbackTasks = stragglers.length;
   if (stragglers.length === 0) return stats;
 

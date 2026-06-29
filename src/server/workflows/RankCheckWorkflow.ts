@@ -116,6 +116,7 @@ async function prepareRankCheckKeywords(input: {
     keywords: trackingKeywords.map((kw) => ({
       id: kw.id,
       keyword: kw.keyword,
+      locationCode: kw.locationCode ?? null,
     })),
   };
 }
