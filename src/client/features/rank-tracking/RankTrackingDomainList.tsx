@@ -12,9 +12,11 @@ import {
   Search,
 } from "lucide-react";
 import {
+  getRankTrackingBuckets,
   getRankTrackingConfigSummaries,
   updateRankTrackingConfig,
 } from "@/serverFunctions/rank-tracking";
+import type { BucketCounts } from "@/server/features/rank-tracking/repositories/snapshotQueries";
 import { devicesLabel, scheduleLabel } from "@/shared/rank-tracking";
 import { Modal } from "@/client/components/Modal";
 import {
@@ -46,12 +48,17 @@ export function RankTrackingDomainList({
   const [archiveTarget, setArchiveTarget] = useState<ConfigSummary | null>(
     null,
   );
+  const [device, setDevice] = useState<"desktop" | "mobile">("mobile");
   const [filters, setFilters] = useState<DomainListFilters>(
     EMPTY_DOMAIN_LIST_FILTERS,
   );
   const { data: summaries } = useQuery({
     queryKey: ["rankTrackingConfigSummaries", projectId],
     queryFn: () => getRankTrackingConfigSummaries({ data: { projectId } }),
+  });
+  const { data: bucketData } = useQuery({
+    queryKey: ["rankTrackingBuckets", projectId, device],
+    queryFn: () => getRankTrackingBuckets({ data: { projectId, device } }),
   });
   const allSummaries = useMemo(() => summaries ?? [], [summaries]);
   const filteredSummaries = useMemo(
@@ -91,7 +98,25 @@ export function RankTrackingDomainList({
     <div className="card bg-base-100 border border-base-300">
       <div className="card-body gap-0 p-0">
         <div className="flex items-center justify-between px-5 pt-4 pb-3">
-          <h2 className="text-sm font-semibold">Tracked Domains</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold">Tracked Domains</h2>
+            <div className="flex items-center gap-1 rounded-lg bg-base-200 p-0.5">
+              <button
+                type="button"
+                className={`btn btn-xs ${device === "mobile" ? "btn-primary" : "btn-ghost"}`}
+                onClick={() => setDevice("mobile")}
+              >
+                Mobile
+              </button>
+              <button
+                type="button"
+                className={`btn btn-xs ${device === "desktop" ? "btn-primary" : "btn-ghost"}`}
+                onClick={() => setDevice("desktop")}
+              >
+                Desktop
+              </button>
+            </div>
+          </div>
           <button
             className="btn btn-primary btn-sm gap-1"
             onClick={onAddDomain}
@@ -150,6 +175,7 @@ export function RankTrackingDomainList({
                 key={summary.id}
                 projectId={projectId}
                 summary={summary}
+                buckets={bucketData?.[summary.id] ?? null}
                 onArchive={() => setArchiveTarget(summary)}
               />
             ))
@@ -196,13 +222,41 @@ export function RankTrackingDomainList({
   );
 }
 
+function BucketBadge({
+  label,
+  count,
+  prev,
+  color,
+}: {
+  label: string;
+  count: number;
+  prev: number | null;
+  color: string;
+}) {
+  const delta = prev !== null ? count - prev : null;
+
+  return (
+    <div className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${color}`}>
+      <span className="opacity-60">{label}</span>
+      <span className="font-mono font-semibold">{count}</span>
+      {delta !== null && delta !== 0 && (
+        <span className={`text-[10px] font-mono ${delta > 0 ? "text-success" : "text-error"}`}>
+          {delta > 0 ? `+${delta}` : delta}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function DomainRow({
   projectId,
   summary,
+  buckets,
   onArchive,
 }: {
   projectId: string;
   summary: ConfigSummary;
+  buckets: { current: BucketCounts; previous: BucketCounts | null } | null;
   onArchive: () => void;
 }) {
   return (
@@ -238,6 +292,15 @@ function DomainRow({
             <AlertTriangle className="size-3" />
             Scheduled check skipped — insufficient credits
           </p>
+        )}
+        {buckets && (
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <BucketBadge label="1-3" count={buckets.current.top3} prev={buckets.previous?.top3 ?? null} color="bg-success/20 text-success" />
+            <BucketBadge label="4-10" count={buckets.current.top4to10} prev={buckets.previous?.top4to10 ?? null} color="bg-info/20 text-info" />
+            <BucketBadge label="11-20" count={buckets.current.top11to20} prev={buckets.previous?.top11to20 ?? null} color="bg-warning/20 text-warning" />
+            <BucketBadge label="21-50" count={buckets.current.top21to50} prev={buckets.previous?.top21to50 ?? null} color="bg-error/20 text-error" />
+            <BucketBadge label="50+" count={buckets.current.top50plus} prev={buckets.previous?.top50plus ?? null} color="bg-base-300 text-base-content/50" />
+          </div>
         )}
       </div>
       <div className="hidden sm:flex items-center gap-6 text-sm pointer-events-none">
