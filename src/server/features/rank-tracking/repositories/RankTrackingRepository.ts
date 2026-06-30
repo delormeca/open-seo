@@ -15,7 +15,9 @@ import {
   getKeywordHistory,
   getConfigTrend,
   getPositionMatrix,
+  getConfigBuckets,
 } from "./snapshotQueries";
+export type { BucketCounts, ConfigBucketData } from "./snapshotQueries";
 
 const DB_BATCH_SIZE = 100;
 type BatchStatement = Parameters<typeof db.batch>[0][number];
@@ -504,4 +506,5 @@ export const RankTrackingRepository = {
   getKeywordHistory,
   getConfigTrend,
   getPositionMatrix,
+  getConfigBuckets,
 };

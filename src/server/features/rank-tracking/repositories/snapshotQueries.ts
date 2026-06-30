@@ -211,6 +211,118 @@ export async function getSnapshotsBeforeDate(
   return getSnapshotsForConfig(configId, { beforeDate, order: "latest" });
 }
 
+// ---------------------------------------------------------------------------
+// Cross-config bucket overview
+// ---------------------------------------------------------------------------
+
+export type BucketCounts = {
+  top3: number;
+  top4to10: number;
+  top11to20: number;
+  top21to50: number;
+  top50plus: number;
+  total: number;
+};
+
+export type ConfigBucketData = {
+  current: BucketCounts;
+  previous: BucketCounts | null;
+};
+
+/**
+ * Returns position-distribution bucket counts for the latest 2 completed,
+ * non-subset runs per config. The first entry per config is "current" (latest
+ * run) and the second is "previous". Configs with no completed runs are omitted
+ * from the result.
+ */
+export async function getConfigBuckets(
+  configIds: string[],
+  device: "desktop" | "mobile",
+): Promise<Record<string, ConfigBucketData>> {
+  if (configIds.length === 0) return {};
+
+  // Step 1: fetch all completed, non-subset runs for the given configs ordered
+  // newest-first, then slice to the 2 most recent per config in JS.
+  const allRuns = await db
+    .select({
+      id: rankCheckRuns.id,
+      configId: rankCheckRuns.configId,
+      startedAt: rankCheckRuns.startedAt,
+    })
+    .from(rankCheckRuns)
+    .where(
+      and(
+        inArray(rankCheckRuns.configId, configIds),
+        eq(rankCheckRuns.status, "completed"),
+        eq(rankCheckRuns.isSubsetRun, false),
+      ),
+    )
+    .orderBy(desc(rankCheckRuns.startedAt));
+
+  const runsByConfig = new Map<string, string[]>();
+  for (const run of allRuns) {
+    const runs = runsByConfig.get(run.configId) ?? [];
+    if (runs.length < 2) {
+      runs.push(run.id);
+      runsByConfig.set(run.configId, runs);
+    }
+  }
+
+  const allRunIds = [...runsByConfig.values()].flat();
+  if (allRunIds.length === 0) return {};
+
+  // Step 2: aggregate bucket counts grouped by configId + runId.
+  const bucketRows = await db
+    .select({
+      configId: rankCheckRuns.configId,
+      runId: rankSnapshots.runId,
+      total: count(),
+      top3: sql<number>`sum(case when ${rankSnapshots.position} between 1 and 3 then 1 else 0 end)`,
+      top4to10: sql<number>`sum(case when ${rankSnapshots.position} between 4 and 10 then 1 else 0 end)`,
+      top11to20: sql<number>`sum(case when ${rankSnapshots.position} between 11 and 20 then 1 else 0 end)`,
+      top21to50: sql<number>`sum(case when ${rankSnapshots.position} between 21 and 50 then 1 else 0 end)`,
+      top50plus: sql<number>`sum(case when ${rankSnapshots.position} > 50 or ${rankSnapshots.position} is null then 1 else 0 end)`,
+    })
+    .from(rankSnapshots)
+    .innerJoin(rankCheckRuns, eq(rankSnapshots.runId, rankCheckRuns.id))
+    .where(
+      and(
+        inArray(rankSnapshots.runId, allRunIds),
+        eq(rankSnapshots.device, device),
+      ),
+    )
+    .groupBy(rankCheckRuns.configId, rankSnapshots.runId);
+
+  // Index bucket rows by runId for O(1) lookup.
+  const bucketByRunId = new Map(bucketRows.map((r) => [r.runId, r]));
+
+  // Step 3: assemble the result record.
+  const result: Record<string, ConfigBucketData> = {};
+
+  for (const [configId, [currentRunId, previousRunId]] of runsByConfig) {
+    const currentRow = currentRunId ? bucketByRunId.get(currentRunId) : undefined;
+    if (!currentRow) continue; // no snapshot data for this device — skip config
+
+    const toBucketCounts = (row: typeof currentRow): BucketCounts => ({
+      top3: row.top3,
+      top4to10: row.top4to10,
+      top11to20: row.top11to20,
+      top21to50: row.top21to50,
+      top50plus: row.top50plus,
+      total: row.total,
+    });
+
+    const previousRow = previousRunId ? bucketByRunId.get(previousRunId) : undefined;
+
+    result[configId] = {
+      current: toBucketCounts(currentRow),
+      previous: previousRow ? toBucketCounts(previousRow) : null,
+    };
+  }
+
+  return result;
+}
+
 export async function getEarliestSnapshotsForKeywords(
   configId: string,
   keywordIds: string[],
