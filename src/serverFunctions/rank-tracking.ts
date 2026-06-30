@@ -69,6 +69,12 @@ export const getRankTrackingConfigSummaries = createServerFn({ method: "POST" })
   .middleware(requireProjectContext)
   .inputValidator((data: unknown) => getConfigsSchema.parse(data))
   .handler(async ({ context }) => {
+    // When viewing the Default project, show configs from all projects
+    if (context.project.name === "Default" && context.project.domain === null) {
+      return RankTrackingRepository.getAllConfigSummaries(
+        context.organizationId,
+      );
+    }
     return RankTrackingRepository.getConfigSummaries(context.projectId);
   });
 
