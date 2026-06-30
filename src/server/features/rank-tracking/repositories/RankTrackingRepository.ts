@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, isNull, lte, max } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, lte, max, sql } from "drizzle-orm";
 import type { InferInsertModel } from "drizzle-orm";
 import { db } from "@/db";
 import {
@@ -348,6 +348,98 @@ async function getConfigSummaries(projectId: string) {
 
   return configs.map((config) => ({
     ...config,
+    projectName: null as string | null,
+    projectDomain: null as string | null,
+    keywordCount: kwCountMap.get(config.id) ?? 0,
+    lastRunStatus: latestRunMap.get(config.id)?.status ?? null,
+    lastRunCompletedAt: latestRunMap.get(config.id)?.completedAt ?? null,
+  }));
+}
+
+async function getAllConfigSummaries(organizationId: string) {
+  const configs = await db
+    .select({
+      id: rankTrackingConfigs.id,
+      projectId: rankTrackingConfigs.projectId,
+      domain: rankTrackingConfigs.domain,
+      locationCode: rankTrackingConfigs.locationCode,
+      languageCode: rankTrackingConfigs.languageCode,
+      devices: rankTrackingConfigs.devices,
+      serpDepth: rankTrackingConfigs.serpDepth,
+      scheduleInterval: rankTrackingConfigs.scheduleInterval,
+      isActive: rankTrackingConfigs.isActive,
+      lastCheckedAt: rankTrackingConfigs.lastCheckedAt,
+      nextCheckAt: rankTrackingConfigs.nextCheckAt,
+      lastSkipReason: rankTrackingConfigs.lastSkipReason,
+      createdAt: rankTrackingConfigs.createdAt,
+      projectName: projects.name,
+      projectDomain: projects.domain,
+    })
+    .from(rankTrackingConfigs)
+    .innerJoin(projects, eq(rankTrackingConfigs.projectId, projects.id))
+    .where(
+      and(
+        eq(rankTrackingConfigs.isActive, true),
+        eq(projects.organizationId, organizationId),
+        isNull(projects.archivedAt),
+        sql`NOT (${projects.name} = 'Default' AND ${projects.domain} IS NULL)`,
+      ),
+    )
+    .orderBy(projects.name, rankTrackingConfigs.createdAt);
+
+  if (configs.length === 0) return [];
+
+  const configIds = configs.map((c) => c.id);
+
+  const kwCounts = await db
+    .select({
+      configId: rankTrackingKeywords.configId,
+      value: count(),
+    })
+    .from(rankTrackingKeywords)
+    .where(inArray(rankTrackingKeywords.configId, configIds))
+    .groupBy(rankTrackingKeywords.configId);
+
+  const kwCountMap = new Map(kwCounts.map((r) => [r.configId, r.value]));
+
+  const latestStarted = db
+    .select({
+      configId: rankCheckRuns.configId,
+      maxStartedAt: max(rankCheckRuns.startedAt).as("maxStartedAt"),
+    })
+    .from(rankCheckRuns)
+    .where(inArray(rankCheckRuns.configId, configIds))
+    .groupBy(rankCheckRuns.configId)
+    .as("latestStarted");
+
+  const latestRuns = await db
+    .select({
+      configId: rankCheckRuns.configId,
+      status: rankCheckRuns.status,
+      completedAt: rankCheckRuns.completedAt,
+    })
+    .from(rankCheckRuns)
+    .innerJoin(
+      latestStarted,
+      and(
+        eq(rankCheckRuns.configId, latestStarted.configId),
+        eq(rankCheckRuns.startedAt, latestStarted.maxStartedAt),
+      ),
+    );
+
+  const latestRunMap = new Map<
+    string,
+    { status: string; completedAt: string | null }
+  >();
+  for (const run of latestRuns) {
+    latestRunMap.set(run.configId, {
+      status: run.status,
+      completedAt: run.completedAt,
+    });
+  }
+
+  return configs.map((config) => ({
+    ...config,
     keywordCount: kwCountMap.get(config.id) ?? 0,
     lastRunStatus: latestRunMap.get(config.id)?.status ?? null,
     lastRunCompletedAt: latestRunMap.get(config.id)?.completedAt ?? null,
@@ -405,6 +497,7 @@ export const RankTrackingRepository = {
   updateKeywordMetrics,
   getKeywordCountForConfig,
   getConfigSummaries,
+  getAllConfigSummaries,
   getLatestSnapshotsForKeywords,
   getSnapshotsBeforeDate,
   getEarliestSnapshotsForKeywords,
