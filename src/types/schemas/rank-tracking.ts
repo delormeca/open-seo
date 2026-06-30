@@ -149,3 +149,8 @@ export const getPositionMatrixSchema = z.object({
   device: deviceEnum,
   runLimit: z.number().int().positive().max(26).default(12),
 });
+
+export const getBucketsSchema = z.object({
+  projectId: z.string().uuid(),
+  device: z.enum(["desktop", "mobile"]),
+});

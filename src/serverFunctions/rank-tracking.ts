@@ -23,6 +23,7 @@ import {
   getConfigTrendSchema,
   getPositionMatrixSchema,
   updateKeywordLocationSchema,
+  getBucketsSchema,
 } from "@/types/schemas/rank-tracking";
 
 export interface RankKeywordHistoryPoint {
@@ -361,4 +362,25 @@ export const updateKeywordLocation = createServerFn({ method: "POST" })
       data.locationName,
     );
     return { ok: true };
+  });
+
+export const getRankTrackingBuckets = createServerFn({ method: "POST" })
+  .middleware(requireProjectContext)
+  .inputValidator((data: unknown) => getBucketsSchema.parse(data))
+  .handler(async ({ data, context }) => {
+    // Get config IDs — all projects if Default, else just this project
+    let configIds: string[];
+    if (context.project.name === "Default" && context.project.domain === null) {
+      const summaries = await RankTrackingRepository.getAllConfigSummaries(
+        context.organizationId,
+      );
+      configIds = summaries.map((s) => s.id);
+    } else {
+      const configs = await RankTrackingRepository.getConfigsForProject(
+        context.projectId,
+      );
+      configIds = configs.map((c) => c.id);
+    }
+    if (configIds.length === 0) return {};
+    return RankTrackingRepository.getConfigBuckets(configIds, data.device);
   });
