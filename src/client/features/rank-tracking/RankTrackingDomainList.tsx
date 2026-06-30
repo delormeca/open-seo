@@ -10,6 +10,8 @@ import {
   Plus,
   ChevronRight,
   Search,
+  TrendingUp,
+  TrendingDown,
 } from "lucide-react";
 import {
   getRankTrackingBuckets,
@@ -240,8 +242,9 @@ function BucketBadge({
       <span className="opacity-60">{label}</span>
       <span className="font-mono font-semibold">{count}</span>
       {delta !== null && delta !== 0 && (
-        <span className={`text-[10px] font-mono ${delta > 0 ? "text-success" : "text-error"}`}>
-          {delta > 0 ? `+${delta}` : delta}
+        <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono ${delta > 0 ? "text-success" : "text-error"}`}>
+          {delta > 0 ? <TrendingUp className="size-2.5" /> : <TrendingDown className="size-2.5" />}
+          {Math.abs(delta)}
         </span>
       )}
     </div>
