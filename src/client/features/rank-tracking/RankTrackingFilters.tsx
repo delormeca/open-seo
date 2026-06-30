@@ -272,7 +272,14 @@ export function applyDomainListFilters<T extends DomainFilterableConfig>(
     filters.locationCode === "all" ? null : Number(filters.locationCode);
 
   return configs.filter((config) => {
-    if (query && !config.domain.toLowerCase().includes(query)) return false;
+    if (query) {
+      const domainMatch = config.domain.toLowerCase().includes(query);
+      const projectMatch =
+        "projectName" in config &&
+        typeof config.projectName === "string" &&
+        config.projectName.toLowerCase().includes(query);
+      if (!domainMatch && !projectMatch) return false;
+    }
 
     if (filters.device !== "all" && config.devices !== filters.device) {
       return false;

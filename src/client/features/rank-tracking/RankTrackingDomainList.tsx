@@ -65,9 +65,15 @@ export function RankTrackingDomainList({
   const activeFilterCount = countActiveDomainListFilters(filters);
 
   const archiveMutation = useMutation({
-    mutationFn: (configId: string) =>
+    mutationFn: ({
+      configId,
+      ownerProjectId,
+    }: {
+      configId: string;
+      ownerProjectId: string;
+    }) =>
       updateRankTrackingConfig({
-        data: { projectId, configId, isActive: false },
+        data: { projectId: ownerProjectId, configId, isActive: false },
       }),
     onSuccess: () => {
       setArchiveTarget(null);
@@ -172,7 +178,12 @@ export function RankTrackingDomainList({
             </button>
             <button
               className="btn btn-error btn-sm gap-1"
-              onClick={() => archiveMutation.mutate(archiveTarget.id)}
+              onClick={() =>
+                archiveMutation.mutate({
+                  configId: archiveTarget.id,
+                  ownerProjectId: archiveTarget.projectId,
+                })
+              }
               disabled={archiveMutation.isPending}
             >
               <Archive className="size-3.5" />
@@ -198,11 +209,17 @@ function DomainRow({
     <div className="relative flex w-full items-center gap-4 px-5 py-3.5 transition-colors hover:bg-base-200/50">
       <Link
         to="/p/$projectId/rank-tracking/$configId"
-        params={{ projectId, configId: summary.id }}
+        params={{ projectId: summary.projectId ?? projectId, configId: summary.id }}
         className="absolute inset-0 z-0"
         aria-label={`Open ${summary.domain}`}
       />
       <div className="min-w-0 flex-1 pointer-events-none">
+        {summary.projectName && (
+          <p className="text-xs font-medium text-primary/80 mb-0.5">
+            {summary.projectName}
+            {summary.projectDomain ? ` — ${summary.projectDomain}` : ""}
+          </p>
+        )}
         <p className="font-medium truncate">{summary.domain}</p>
         <p className="text-xs text-base-content/60">
           {LOCATIONS[summary.locationCode] ?? "US"} &middot;{" "}
