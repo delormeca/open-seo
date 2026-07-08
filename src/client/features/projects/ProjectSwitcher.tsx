@@ -1,6 +1,7 @@
+import { useMemo, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronsUpDown, FolderCog } from "lucide-react";
+import { Check, ChevronsUpDown, FolderCog, Search } from "lucide-react";
 import { getProjects } from "@/serverFunctions/projects";
 import { setLastProjectId } from "@/client/lib/active-project";
 import type { ProjectSummary } from "./types";
@@ -23,6 +24,7 @@ export function ProjectSwitcher({
   onCloseDrawer?: () => void;
 }) {
   const navigate = useNavigate();
+  const [search, setSearch] = useState("");
   const projectsQuery = useQuery({
     queryKey: ["projects"],
     queryFn: () => getProjects(),
@@ -33,8 +35,19 @@ export function ProjectSwitcher({
 
   const isSidebar = variant === "sidebar";
 
+  const filteredProjects = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return projects;
+    return projects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.domain && p.domain.toLowerCase().includes(q)),
+    );
+  }, [projects, search]);
+
   const handleSelect = (project: ProjectSummary) => {
     closeDropdown();
+    setSearch("");
     onCloseDrawer?.();
     if (project.id === activeProjectId) return;
     setLastProjectId(project.id);
@@ -69,56 +82,74 @@ export function ProjectSwitcher({
         <ChevronsUpDown className="size-3.5 shrink-0 text-base-content/40" />
       </button>
 
-      <ul
+      <div
         tabIndex={0}
-        className={`dropdown-content z-30 menu rounded-box border border-base-300 bg-base-100 p-2 shadow-lg ${
+        className={`dropdown-content z-30 flex flex-col rounded-box border border-base-300 bg-base-100 shadow-lg ${
           isSidebar ? "w-full" : "mt-2 w-64"
         }`}
       >
-        {projects.map((project) => {
-          const isActive = project.id === activeProjectId;
-          return (
-            <li key={project.id}>
-              <button
-                type="button"
-                onClick={() => handleSelect(project)}
-                className={isActive ? "active" : ""}
-              >
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate">{project.name}</span>
-                  {project.domain ? (
-                    <span className="truncate text-xs text-base-content/50">
-                      {project.domain}
-                    </span>
+        <div className="px-2 pt-2 pb-1">
+          <label className="input input-bordered input-sm flex items-center gap-2 bg-base-100">
+            <Search className="size-3.5 text-base-content/40" />
+            <input
+              type="text"
+              className="grow text-sm"
+              placeholder="Search projects..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
+            />
+          </label>
+        </div>
+        <ul className="menu p-2 pt-0 max-h-72 overflow-y-auto">
+          {filteredProjects.map((project) => {
+            const isActive = project.id === activeProjectId;
+            return (
+              <li key={project.id}>
+                <button
+                  type="button"
+                  onClick={() => handleSelect(project)}
+                  className={isActive ? "active" : ""}
+                >
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate">{project.name}</span>
+                    {project.domain ? (
+                      <span className="truncate text-xs text-base-content/50">
+                        {project.domain}
+                      </span>
+                    ) : null}
+                  </span>
+                  {isActive ? (
+                    <Check className="size-4 shrink-0 text-primary" />
                   ) : null}
-                </span>
-                {isActive ? (
-                  <Check className="size-4 shrink-0 text-primary" />
-                ) : null}
-              </button>
+                </button>
+              </li>
+            );
+          })}
+          {filteredProjects.length === 0 && (
+            <li className="px-3 py-2 text-xs text-base-content/50">
+              No matching projects
             </li>
-          );
-        })}
-
-        {projects.length > 0 ? (
-          <li>
-            <hr className="my-1 border-base-300" />
-          </li>
-        ) : null}
-
-        <li>
-          <Link
-            to="/projects"
-            onClick={() => {
-              closeDropdown();
-              onCloseDrawer?.();
-            }}
-          >
-            <FolderCog className="size-4" />
-            Manage projects
-          </Link>
-        </li>
-      </ul>
+          )}
+        </ul>
+        <div className="border-t border-base-300 p-2">
+          <ul className="menu p-0">
+            <li>
+              <Link
+                to="/projects"
+                onClick={() => {
+                  closeDropdown();
+                  setSearch("");
+                  onCloseDrawer?.();
+                }}
+              >
+                <FolderCog className="size-4" />
+                Manage projects
+              </Link>
+            </li>
+          </ul>
+        </div>
+      </div>
     </div>
   );
 }
